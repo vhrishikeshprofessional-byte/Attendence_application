@@ -47,7 +47,7 @@ jobs:
       - run: pip install -r attendance-backend/requirements-dev.txt
       - name: Bandit Scan
         run: python -m bandit -r attendance-backend/app -f json -o bandit.json
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: bandit-report
@@ -80,7 +80,7 @@ jobs:
         run: |
           cd attendance-backend
           python -m pytest --cov=app --cov-branch --cov-report=term-missing --cov-report=xml --cov-fail-under=80 -v
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: backend-coverage
@@ -127,7 +127,7 @@ jobs:
         run: |
           cd attendance-frontend
           npx vitest run --coverage
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: frontend-coverage
@@ -197,7 +197,7 @@ jobs:
         run: |
           docker save attendance-backend:ci -o backend-image.tar
           docker save attendance-frontend:ci -o frontend-image.tar
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: docker-images
           path: |

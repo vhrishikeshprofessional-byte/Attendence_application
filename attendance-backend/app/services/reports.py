@@ -417,8 +417,8 @@ async def bi_exceptions(start: dt.date, end: dt.date, skip: int=0, limit: int=50
             "id": str(r["_id"]),
             "employee_id": str(r["employee_id"]),
             "date": r["date"],
-            "entry_time": r["entry_time"].isoformat() + "Z",
-            "exit_time": r["exit_time"].isoformat() + "Z" if r.get("exit_time") else None,
+            "entry_time": r["entry_time"].replace(tzinfo=dt.timezone.utc).isoformat().replace("+00:00", "Z"),
+            "exit_time": r["exit_time"].replace(tzinfo=dt.timezone.utc).isoformat().replace("+00:00", "Z") if r.get("exit_time") else None,
             "type": reason,
             "severity": severity,
             "duration_minutes": r.get("duration_minutes", 0)

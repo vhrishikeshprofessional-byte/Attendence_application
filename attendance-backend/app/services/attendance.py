@@ -48,6 +48,8 @@ def validate_times(
         raise Unprocessable("Exit time cannot be in the future", code="FUTURE_TIME")
     if exit_ <= entry:
         raise Unprocessable("Exit time must be after entry time", code="EXIT_BEFORE_ENTRY")
+    if ist_date(entry) != ist_date(exit_):
+        raise Unprocessable("A session may not cross IST midnight", code="SESSION_CROSSES_MIDNIGHT")
     if exit_ - entry > _max_td():
         raise Unprocessable(
             f"A session cannot exceed {settings.MAX_SESSION_HOURS} hours",

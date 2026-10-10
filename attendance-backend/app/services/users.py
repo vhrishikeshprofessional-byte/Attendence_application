@@ -1,6 +1,7 @@
 """User management use-cases (admin creates/edits/deactivates employees)."""
 from __future__ import annotations
 
+import html
 from bson import ObjectId
 
 from app.config import settings
@@ -171,3 +172,89 @@ async def delete_user(actor: dict, ident: str) -> None:
 
     await run_txn(_tx)
     await refresh_tokens_repo.revoke_all_for_user(user["_id"])
+
+
+async def send_warning_email(ident: str, payload: "WarningEmailRequest") -> None:
+    from app.services.email import send_email
+    from app.core.errors import AppError
+
+    user = await get_user(ident)
+    name = user["personal"]["full_name"]
+    email = user["work_email"]
+    
+    start_str = payload.week_start.strftime("%B %d, %Y")
+    end_str = payload.week_end.strftime("%B %d, %Y")
+    
+    # Generate the text body
+    text_body = f"""Dear {name},
+    
+This is an automated notice from the Attendance Management System. Our records indicate that your attendance for the week of {start_str} to {end_str} did not meet the company's attendance policy requirements.
+
+Your Attendance Statistics
+- Office Days: {payload.office_days_attended} (Required: >= {payload.office_days_required})
+- Total Working Hours: {payload.total_hours_attended:.2f} h (Required: >= {payload.total_hours_required:.2f} h)
+- Average Hours / Day: {payload.avg_hours_attended:.2f} h (Required: >= {payload.avg_hours_required:.2f} h)
+
+Violation Reasons
+"""
+    for reason in payload.violation_reasons:
+        text_body += f"- {reason}\n"
+        
+    text_body += """
+Please discuss this with your manager. Repeated non-compliance may result in a formal HR review.
+
+This message was sent automatically. Please do not reply."""
+
+    # Generate the HTML body
+    html_body = f"""
+    <div style="font-family: sans-serif; color: #333;">
+        <p>Dear <strong>{name}</strong>,</p>
+        <p>This is an automated notice from the Attendance Management System. Our records indicate that your attendance for the week of <strong>{start_str}</strong> to <strong>{end_str}</strong> did not meet the company's attendance policy requirements.</p>
+        
+        <h3>Your Attendance Statistics</h3>
+        <table border="1" cellpadding="8" cellspacing="0" style="border-collapse: collapse; width: 100%; max-width: 600px; text-align: left;">
+            <thead style="background-color: #f9f9f9;">
+                <tr>
+                    <th>Metric</th>
+                    <th>Your Value</th>
+                    <th>Required</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td>Office Days</td>
+                    <td>{payload.office_days_attended}</td>
+                    <td>&ge; {payload.office_days_required}</td>
+                </tr>
+                <tr>
+                    <td>Total Working Hours</td>
+                    <td>{payload.total_hours_attended:.2f} h</td>
+                    <td>&ge; {payload.total_hours_required:.2f} h</td>
+                </tr>
+                <tr>
+                    <td>Average Hours / Day</td>
+                    <td>{payload.avg_hours_attended:.2f} h</td>
+                    <td>&ge; {payload.avg_hours_required:.2f} h</td>
+                </tr>
+            </tbody>
+        </table>
+
+        <h3>Violation Reasons</h3>
+        <ul>
+            {"".join(f"<li>{html.escape(reason)}</li>" for reason in payload.violation_reasons)}
+        </ul>
+
+        <p>Please discuss this with your manager. Repeated non-compliance may result in a formal HR review.</p>
+        <br/>
+        <p style="font-size: 0.85em; color: #888;">This message was sent automatically. Please do not reply.</p>
+    </div>
+    """
+
+    success = await send_email(
+        to=email,
+        subject="Attendance Policy Warning",
+        body=text_body,
+        html_body=html_body
+    )
+    if not success:
+        raise AppError("Failed to send warning email", status_code=500, code="INTERNAL_ERROR")

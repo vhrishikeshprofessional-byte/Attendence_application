@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, Query
 from app.api.deps import AdminUser, CurrentUser
 from app.core.errors import Forbidden
 from app.models.auth import MessageOut
-from app.models.users import UserCreate, UserUpdate
+from app.models.users import UserCreate, UserUpdate, WarningEmailRequest
 from app.services import users as svc
 from app.utils.pagination import Page, page_meta
 from app.utils.serialize import doc_out
@@ -52,3 +52,9 @@ async def update_user(ident: str, body: UserUpdate, admin: AdminUser):
 async def delete_user(ident: str, admin: AdminUser):
     await svc.delete_user(admin, ident)
     return {"message": "User deleted"}
+
+
+@router.post("/{ident}/warning", response_model=MessageOut)
+async def send_warning_email(ident: str, body: WarningEmailRequest, admin: AdminUser):
+    await svc.send_warning_email(ident, body)
+    return {"message": "Warning email sent successfully"}

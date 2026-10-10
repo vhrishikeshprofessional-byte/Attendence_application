@@ -1,0 +1,300 @@
+name: CI Pipeline
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch: {}
+
+env:
+  PYTHON_VERSION: "3.13"
+  NODE_VERSION: "22"
+  REGISTRY: ghcr.io
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ==========================================
+  # BACKEND JOBS
+  # ==========================================
+  backend-lint-type:
+    name: Backend - Ruff & MyPy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+      - run: pip install -r attendance-backend/requirements-dev.txt
+      - name: Ruff Check
+        run: python -m ruff check attendance-backend
+      - name: MyPy Check
+        run: python -m mypy attendance-backend/app
+
+  backend-sast:
+    name: Backend - Bandit (SAST)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+      - run: pip install -r attendance-backend/requirements-dev.txt
+      - name: Bandit Scan
+        run: python -m bandit -r attendance-backend/app -f json -o bandit.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: bandit-report
+          path: bandit.json
+
+  backend-deps:
+    name: Backend - pip-audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+      - run: pip install pip-audit
+      - name: Audit deps
+        run: python -m pip_audit -r attendance-backend/requirements.txt --strict
+
+  backend-test:
+    name: Backend - Pytest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+      - run: pip install -r attendance-backend/requirements-dev.txt
+      - name: Pytest with Coverage
+        run: |
+          cd attendance-backend
+          python -m pytest --cov=app --cov-branch --cov-report=term-missing --cov-report=xml --cov-fail-under=80 -v
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: backend-coverage
+          path: attendance-backend/coverage.xml
+
+  # ==========================================
+  # FRONTEND JOBS
+  # ==========================================
+  frontend-types:
+    name: Frontend - Typecheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: attendance-frontend/package-lock.json
+      - run: cd attendance-frontend && npm ci
+      - run: cd attendance-frontend && npm run typecheck
+
+  frontend-deps:
+    name: Frontend - npm audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - run: cd attendance-frontend && npm audit --audit-level=high
+
+  frontend-test:
+    name: Frontend - Vitest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: attendance-frontend/package-lock.json
+      - run: cd attendance-frontend && npm ci
+      - name: Vitest Coverage
+        run: |
+          cd attendance-frontend
+          npx vitest run --coverage
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: frontend-coverage
+          path: attendance-frontend/coverage/
+
+  frontend-build:
+    name: Frontend - Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: attendance-frontend/package-lock.json
+      - run: cd attendance-frontend && npm ci
+      - run: cd attendance-frontend && npm run build
+
+  # ==========================================
+  # CROSS-CUTTING JOBS
+  # ==========================================
+  gitleaks:
+    name: Gitleaks (Secrets)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  docker-build:
+    name: Docker Build
+    runs-on: ubuntu-latest
+    needs:
+      - backend-lint-type
+      - backend-sast
+      - backend-deps
+      - backend-test
+      - frontend-types
+      - frontend-deps
+      - frontend-test
+      - frontend-build
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build Backend Image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./attendance-backend
+          push: false
+          load: true
+          tags: attendance-backend:ci
+          cache-from: type=gha,scope=backend
+          cache-to: type=gha,mode=max,scope=backend
+      - name: Build Frontend Image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./attendance-frontend
+          push: false
+          load: true
+          tags: attendance-frontend:ci
+          cache-from: type=gha,scope=frontend
+          cache-to: type=gha,mode=max,scope=frontend
+      - name: Save Images
+        run: |
+          docker save attendance-backend:ci -o backend-image.tar
+          docker save attendance-frontend:ci -o frontend-image.tar
+      - uses: actions/upload-artifact@v4
+        with:
+          name: docker-images
+          path: |
+            backend-image.tar
+            frontend-image.tar
+          retention-days: 1
+
+  trivy:
+    name: Trivy (Container Scan)
+    runs-on: ubuntu-latest
+    needs: docker-build
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: docker-images
+      - run: docker load -i backend-image.tar
+      - run: docker load -i frontend-image.tar
+      - name: Scan Backend
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: attendance-backend:ci
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+          format: sarif
+          output: backend-trivy.sarif
+      - name: Scan Frontend
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: attendance-frontend:ci
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+          format: sarif
+          output: frontend-trivy.sarif
+      - name: Upload Backend SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: backend-trivy.sarif
+          category: trivy-backend
+      - name: Upload Frontend SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: frontend-trivy.sarif
+          category: trivy-frontend
+
+  integration:
+    name: Integration (Compose Smoke Test)
+    runs-on: ubuntu-latest
+    needs: docker-build
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: docker-images
+      - run: docker load -i backend-image.tar
+      - run: docker load -i frontend-image.tar
+      - name: Retag images for compose
+        run: |
+          docker tag attendance-backend:ci attendance-backend:latest
+          docker tag attendance-frontend:ci attendance-frontend:latest
+      - name: Bring up stack
+        run: |
+          # Use docker-compose.ci.yml if available, else root
+          if [ -f docker-compose.ci.yml ]; then
+            docker compose -f docker-compose.ci.yml up -d
+          else
+            docker compose up -d
+          fi
+      - name: Wait for services
+        run: sleep 15
+      - name: Check Backend Health
+        run: |
+          curl -f http://localhost:8000/health || (docker compose logs backend && exit 1)
+      - name: Check Frontend Serving
+        run: |
+          curl -f http://localhost:5173 || (docker compose logs frontend && exit 1)
+
+  quality-gate:
+    name: Quality Gate
+    runs-on: ubuntu-latest
+    needs:
+      - gitleaks
+      - trivy
+      - integration
+    if: always()
+    steps:
+      - name: Verify all required jobs succeeded
+        run: |
+          if [[ "${{ contains(needs.*.result, 'failure') }}" == "true" ]]; then
+            echo "One or more required jobs failed."
+            exit 1
+          fi
+          echo "All required checks passed."

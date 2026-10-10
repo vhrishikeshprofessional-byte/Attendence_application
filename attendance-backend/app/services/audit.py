@@ -59,7 +59,8 @@ async def list_logs(
     if entity_type:
         filt["entity.type"] = entity_type
     if action:
-        filt["action"] = {"$regex": action, "$options": "i"}
+        import re
+        filt["action"] = {"$regex": re.escape(action), "$options": "i"}
 
     total = await audit_logs_repo.count(filt)
     rows = await audit_logs_repo.find(filt, sort=[("ts", -1)], skip=skip, limit=limit)

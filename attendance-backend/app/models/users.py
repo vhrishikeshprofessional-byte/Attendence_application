@@ -28,3 +28,15 @@ class UserUpdate(_Base):
     joining_date: date | None = None
     team_ids: list[str] | None = Field(default=None, max_length=50)
     status: Literal["active", "inactive"] | None = None
+
+
+class WarningEmailRequest(_Base):
+    week_start: date
+    week_end: date
+    office_days_attended: int
+    office_days_required: int
+    total_hours_attended: float
+    total_hours_required: float
+    avg_hours_attended: float
+    avg_hours_required: float
+    violation_reasons: list[str]
